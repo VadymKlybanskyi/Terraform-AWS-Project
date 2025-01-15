@@ -132,7 +132,7 @@ jobs:
      
       # Apply Terraform changes (only for push to the terraform branch)
       - name: Terraform Apply
-        if: github.event_name == 'push' && github.ref == 'refs/heads/terraform'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
           terraform apply -auto-approve

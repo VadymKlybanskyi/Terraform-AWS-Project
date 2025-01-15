@@ -25,46 +25,46 @@ source "amazon-ebs" "ubuntu" {
 build {
   sources = ["source.amazon-ebs.ubuntu"]
 
-  provisioner "file" { # Переносимо docker-compose на сервер EC2
+  provisioner "file" { # Transferring docker-compose to the EC2 server
     source      = "docker-compose.yaml" 
     destination = "/home/ubuntu/docker-compose.yaml"  
   }
 
-  provisioner "file" { # Переносимо кастомну сторінку для веб-сайту
+  provisioner "file" { # Transferring custom webpage for the website
     source      = "index.html"  
     destination = "/home/ubuntu/index.html"
   }
 
-    provisioner "file" { # Переносимо nginx.conf
+  provisioner "file" { # Transferring nginx.conf
     source      = "nginx.conf"  
     destination = "/home/ubuntu/nginx.conf"
   }
 
   provisioner "shell" {
     inline = [
-      # Оновлення системи
+      # System update
       "sudo apt-get update -y",
       "sudo apt-get upgrade -y",
 
-      # Встановлення Docker і Docker Compose
+      # Installing Docker and Docker Compose
       "sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common",
       "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -",
       "sudo add-apt-repository \"deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\"",
       "sudo apt-get update -y",
       "sudo apt-get install -y docker-ce docker-compose",
 
-      # Запуск та увімкнення Docker
+      # Starting and enabling Docker
       "sudo systemctl start docker",
       "sudo systemctl enable docker",
 
-      # Додавання користувача до групи docker для уникнення проблем Permission Denied
+      # Adding user to the docker group to avoid Permission Denied issues
       "sudo usermod -aG docker ubuntu",
 
-      # Створення папки logs для логів
+      # Creating logs folder for logs
       "mkdir -p /home/ubuntu/logs",
       "sudo chmod -R 777 /home/ubuntu/logs",
 
-      # Перевірка версій Docker і Docker Compose
+      # Checking Docker and Docker Compose versions
       "sudo docker --version",
       "sudo docker-compose --version"
     ]
