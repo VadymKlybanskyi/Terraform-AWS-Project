@@ -6,7 +6,7 @@ on:
    branches:
       - main # Perform a pipeline when there are pushes to the main branch
   # paths:
-  #    - project/*
+  #    - project/* 
 
   pull_request:
     branches:
