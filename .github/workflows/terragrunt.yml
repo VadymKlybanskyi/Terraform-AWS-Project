@@ -1,0 +1,208 @@
+name: "Terragrunt CI/CD with Packer build & Ansible"
+
+on:
+  workflow_dispatch:  # Triggered manually only
+  #push:
+  # branches:
+  #    - terraform # Trigger the pipeline on pushes to the terraform branch
+  # paths:
+  #    - project/*
+
+  pull_request:
+    branches:
+      - terraform  # Trigger the pipeline when there's a pull request to the terraform branch
+    paths:
+      - project/terragrunt/*  # Trigger the pipeline if changes are in the terragrunt folder
+
+env:
+  AMI_COUNT: 2  # Number of AMIs to keep
+
+jobs:
+  packer-build:
+    if: false  # Don't run automatically
+    runs-on: ubuntu-latest  # Run on the latest Ubuntu version
+    steps:
+      - name: Checkout code  # Clone the repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Packer  # Set up Packer
+        uses: hashicorp/setup-packer@v2
+
+      - name: Initialize Packer  # Initialize Packer to work with the configuration
+        run: packer init $GITHUB_WORKSPACE/project/terragrunt/packer
+
+      - name: Set up AWS CLI  # Set up AWS CLI for AWS access
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Verify AWS credentials  # Verify AWS setup
+        run: |
+          aws sts get-caller-identity
+
+      - name: Check current directory  # Check the current directory for Packer
+        run: |
+          ls -alh $GITHUB_WORKSPACE/project/terragrunt/packer
+
+      - name: Packer Build  # Start the AMI build process with Packer
+        run: |
+          cd $GITHUB_WORKSPACE/project/terragrunt/packer
+          packer build packer.pkr.hcl
+          # Save the new AMI ID built by Packer
+          new_ami_id=$(aws ec2 describe-images --filters "Name=name,Values=new-ami" --query "Images[0].ImageId" --output text)
+          echo "New AMI ID: $new_ami_id"
+
+      - name: Clean up old AMIs  # Clean up old AMIs, keeping only the last $AMI_COUNT
+        run: |
+          ami_ids=$(aws ec2 describe-images --owners self --query "Images[].[ImageId,CreationDate]" --output text)
+          echo "Retrieved AMI IDs and Creation Dates: $ami_ids"
+          ami_ids="$ami_ids $new_ami_id"
+          ami_ids_sorted=$(echo "$ami_ids" | sort -k2 -r)
+          echo "Sorted AMI IDs: $ami_ids_sorted"
+          ami_count=$(echo "$ami_ids_sorted" | wc -l)
+          if [ "$ami_count" -gt $AMI_COUNT ]; then
+            ami_to_delete=$(echo "$ami_ids_sorted" | tail -n +$((AMI_COUNT + 1)) | awk '{print $1}')
+            echo "AMI IDs to delete: $ami_to_delete"
+            for ami in $ami_to_delete; do
+              echo "Deregistering AMI $ami"
+              aws ec2 deregister-image --image-id $ami
+            done
+          else
+            echo "No old AMIs to delete. Keeping only the most recent $AMI_COUNT."
+          fi
+
+  # AWS resource setup with Terragrunt
+  setup-aws:
+    if: false  # Don't run automatically
+    runs-on: ubuntu-latest  # Run on the latest Ubuntu version
+    needs: packer-build  # Dependency on the previous packer-build step
+    steps:
+      - name: Checkout code  # Clone the repository
+        uses: actions/checkout@v4
+
+      - name: Set up AWS CLI  # Set up AWS CLI for AWS access
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Verify AWS credentials  # Verify AWS setup
+        run: |
+          aws sts get-caller-identity
+
+      - name: Setup Terragrunt  # Set up Terragrunt to work with Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.7.3
+          terraform_wrapper: false
+  
+      - name: Setup Terragrunt  # Install Terragrunt to work with AWS resources
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.55.1
+
+      - name: Set Working Directory  # Set the working directory for Terragrunt
+        run: echo "WORKING_DIR=project/terragrunt/terragrunt" >> $GITHUB_ENV
+  
+      - name: Terragrunt Format  # Format Terragrunt configurations
+        id: fmt
+        run: terragrunt hclfmt --terragrunt-working-dir $WORKING_DIR --terragrunt-check
+  
+      - name: Terragrunt Init  # Initialize Terraform/Terragrunt
+        id: init
+        run: terragrunt run-all init --terragrunt-working-dir $WORKING_DIR --terragrunt-non-interactive
+  
+      - name: Terragrunt Validate  # Validate configuration for errors
+        id: validate
+        run: terragrunt run-all validate -no-color --terragrunt-working-dir $WORKING_DIR --terragrunt-non-interactive
+  
+      - name: Terragrunt Plan  # Plan changes in Terraform
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: terragrunt run-all plan -no-color --terragrunt-working-dir $WORKING_DIR --terragrunt-non-interactive
+         
+      - name: Terragrunt Apply  # Apply changes in Terraform
+        if: github.event_name == 'push' && github.ref == 'refs/heads/terraform'
+        run: |
+           terragrunt run-all apply --terragrunt-working-dir $WORKING_DIR --terragrunt-non-interactive
+
+# Ansible job
+  ansible:
+    runs-on: ubuntu-latest  # Run on the latest Ubuntu version
+    needs: setup-aws  # Dependency on the previous setup-aws step
+    steps:
+      - name: Checkout code  # Clone the repository
+        uses: actions/checkout@v4
+
+      - name: Set up AWS CLI  # Set up AWS CLI for AWS access
+        uses: aws-actions/configure-aws-credentials@v4
+        with: 
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
+          aws-region: us-east-1
+
+      - name: Get asg_sg  # Get the security group ID for ASG
+        id: asg_sg 
+        run: |
+          echo "ASG_SG_ID=$(aws ec2 describe-security-groups --query "SecurityGroups[?contains(GroupName, 'dev_app-asg_sg')].GroupId" --output text)" >> $GITHUB_OUTPUT
+
+      - name: Add ingress rule for SSH  # Add an SSH access rule
+        run: |
+          aws ec2 authorize-security-group-ingress \
+          --group-id $ASG_SG_ID \
+          --protocol tcp \
+          --port 22 \
+          --cidr $(curl http://ifconfig.me)/32
+        env:
+          ASG_SG_ID: ${{ steps.asg_sg.outputs.ASG_SG_ID }}
+
+      - name: Get EC2 instance public IP  # Get the public IP of the EC2 instance
+        id: ec2_ip
+        run: |
+          EC2_IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=dev-app" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          echo "EC2_IP=$EC2_IP" >> $GITHUB_ENV
+    
+      - name: Set up SSH key for EC2 access  # Set up SSH key for EC2 access
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ env.EC2_IP }} >> ~/.ssh/known_hosts
+    
+      - name: Create dynamic inventory  # Create a dynamic inventory for Ansible
+        run: |
+          echo "[ec2]" > inventory
+          echo "${{ env.EC2_IP }} ansible_ssh_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa" >> inventory
+    
+      - name: Install Ansible  # Install Ansible
+        run: |
+          sudo apt update
+          sudo apt install -y python3-pip
+          python3 -m pip install ansible
+    
+      - name: Install Ansible roles/dependencies  # Install Ansible roles
+        run: |
+          if [ -f requirements.yml ]; then
+            ansible-galaxy install -r requirements.yml
+          fi
+
+      - name: Run Ansible Playbook  # Run Ansible Playbook to update configuration
+        run: |
+          ansible-playbook -i inventory project/terragrunt/ansible/playbook.yml
+
+      - name: Remove ingress rule for SSH access  # Remove the SSH access rule
+        run: |
+          aws ec2 revoke-security-group-ingress \
+          --group-id $ASG_SG_ID \
+          --protocol tcp \
+          --port 22 \
+          --cidr $(curl http://ifconfig.me)/32
+        env:
+          ASG_SG_ID: ${{ steps.asg_sg.outputs.ASG_SG_ID }}

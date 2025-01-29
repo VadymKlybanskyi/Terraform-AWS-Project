@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terraform</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Arial', sans-serif;
+            background-color: #808080;
+            overflow: hidden;
+        }
+
+        .message {
+            font-size: 3rem;
+            font-weight: bold;
+            text-align: center;
+            color: #ffffff;
+            text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 3s ease-in-out, scaleUp 3s ease-in-out infinite alternate;
+        }
+
+        .message a {
+            color: #00bcd4;
+            text-decoration: none;
+            font-weight: normal;
+            transition: color 0.3s;
+        }
+
+        .message a:hover {
+            color: #ff9800;
+        }
+
+        @keyframes fadeIn {
+            0% {
+                opacity: 0;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        @keyframes scaleUp {
+            0% {
+                transform: scale(0.8);
+            }
+
+            100% {
+                transform: scale(1.1);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="message">
+        Ласкаво прошу на сайт <a href="https://tryandcry.pp.ua" target="_blank">tryandcry.pp.ua</a>
+    </div>
+</body>
+
+</html>

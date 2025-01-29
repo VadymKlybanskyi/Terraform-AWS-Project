@@ -1,0 +1,45 @@
+---
+# Copy files for web servers (nginx) and run containers
+- name: Setup web server
+  hosts: all
+  become: yes
+  remote_user: ubuntu
+  vars:
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+  # Checking for sudo rights
+  tasks:
+    - name: Check if user has sudo rights
+      command: sudo -n true
+      register: sudo_check
+      ignore_errors: yes
+
+    - name: Fail if user does not have sudo rights
+      fail:
+        msg: "The user does not have sudo rights!"
+      when: sudo_check.rc != 0
+
+    # Update index.html file to the server
+    - name: copy index.html
+      copy:
+        src: index.html
+        dest: /home/ubuntu/index.html
+      notify: Notify about successful copy
+
+    # Checking the availability of docker-compose
+    - name: Check if docker-compose is installed
+      command: docker-compose --version
+      register: docker_compose_check
+      failed_when: "'command not found' in docker_compose_check.stderr"
+
+    # Reboot docker container
+    - name: Reboot container
+      command: docker restart nginx-server
+      register: nginx_status
+      changed_when: false
+
+    # Сheck for successful copying
+  handlers:
+    - name: Notify about successful copy
+      debug:
+        msg: "Setup completed successfully! All files copied, and containers are running."

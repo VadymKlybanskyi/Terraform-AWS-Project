@@ -1,138 +1,129 @@
 name: "Packer Build & Terraform CI/CD"
 
 on:
-  workflow_dispatch:  # Starting only manually
-  push:
-   branches:
-      - main # Perform a pipeline when there are pushes to the main branch
+  workflow_dispatch:  # Trigger the workflow manually
+  #push:
+  # branches:
+  #    - main # Uncomment to trigger the pipeline on push to the main branch
   # paths:
-  #    - project/* 
+  #    - project/terrafrom/*
 
   pull_request:
     branches:
-      - main
+      - main  # Trigger the pipeline on pull request to the main branch
     paths:
-      - project/* # Perform a pipeline when there is a pull_request to the main branch
+      - project/terrafrom/*  # Trigger pipeline only for changes in the specified path
       
 jobs:
   packer-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # Run the job on the latest Ubuntu environment
     steps:
-      - name: Checkout code
+      - name: Checkout code  # Checkout the repository code to the workspace
         uses: actions/checkout@v4
-      
-      - name: Set up Packer
+
+      - name: Set up Packer  # Set up Packer tool to build the AMI
         uses: hashicorp/setup-packer@v2
 
-      - name: Initialize Packer
+      - name: Initialize Packer  # Initialize the Packer template for building
         run: packer init ./project/packer
 
-      - name: Set up AWS CLI
+      - name: Set up AWS CLI  # Configure AWS CLI with the credentials for authentication
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Verify AWS credentials
+      - name: Verify AWS credentials  # Verify that the AWS credentials are valid and functional
         run: |
           aws sts get-caller-identity
 
-      - name: Check current directory
+      - name: Check current directory  # List the contents of the Packer directory to verify files are present
         run: |
-          ls -alh $GITHUB_WORKSPACE/project/packer    
+          ls -alh $GITHUB_WORKSPACE/project/packer
 
-      - name: Packer Build
+      - name: Packer Build  # Build the AMI using the Packer configuration file
         run: |
           cd $GITHUB_WORKSPACE/project/packer
           packer build packer.pkr.hcl
-          # Save the ID of the new AMI built by Packer
+          # Save the ID of the newly built AMI
           new_ami_id=$(aws ec2 describe-images --filters "Name=name,Values=new-ami" --query "Images[0].ImageId" --output text)
-          echo "New AMI ID: $new_ami_id"
+          echo "New AMI ID: $new_ami_id"  # Output the new AMI ID
 
-      - name: Clean up old AMIs
+      - name: Clean up old AMIs  # Clean up older AMIs, keeping only the latest 3
         run: |
-          # Retrieve a list of all AMIs
+          # Retrieve all AMI IDs and creation dates
           ami_ids=$(aws ec2 describe-images --owners self --query "Images[].[ImageId,CreationDate]" --output text)
           echo "Retrieved AMI IDs and Creation Dates: $ami_ids"
 
           # Add the newly created AMI to the list, if it exists
           ami_ids="$ami_ids $new_ami_id"
           
-          # Sort AMIs by creation date (oldest first)
+          # Sort the AMIs by creation date (oldest first)
           ami_ids_sorted=$(echo "$ami_ids" | sort -k2)
 
           # Count the number of AMIs
           ami_count=$(echo "$ami_ids_sorted" | wc -l)
           if [ "$ami_count" -gt 3 ]; then
-            # Remove older AMIs, keeping only the latest 3
-            ami_to_delete=$(echo "$ami_ids_sorted" | head -n -3 | awk '{print $1}') # Use only AMI IDs
+            # If more than 3 AMIs, deregister older ones
+            ami_to_delete=$(echo "$ami_ids_sorted" | head -n -3 | awk '{print $1}')
             for ami in $ami_to_delete; do
               echo "Deregistering AMI $ami"
-              aws ec2 deregister-image --image-id $ami
+              aws ec2 deregister-image --image-id $ami  # Deregister the old AMIs
             done
           else
-            echo "No old AMIs to delete. Keeping only the most recent 3."
+            echo "No old AMIs to delete. Keeping only the most recent 3."  # No need to delete if there are 3 or fewer AMIs
           fi
 
   setup-aws:
-    runs-on: ubuntu-latest
-    needs: packer-build
+    runs-on: ubuntu-latest  # Run this job on the latest Ubuntu environment
+    needs: packer-build  # This job depends on the successful completion of the packer-build job
     steps:
-      # Checkout репозиторію
-      - name: Checkout code
+      - name: Checkout code  # Checkout the repository code to the workspace
         uses: actions/checkout@v4
 
-      # Login to AWS using AWS CLI
-      - name: Set up AWS CLI
+      - name: Set up AWS CLI  # Configure AWS CLI with credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Verify AWS credentials
-      - name: Verify AWS credentials
+      - name: Verify AWS credentials  # Verify the AWS credentials are valid and functional
         run: |
           aws sts get-caller-identity
 
-      # Setup Terraform
-      - name: Setup Terraform
+      - name: Setup Terraform  # Set up Terraform with the specified version
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: ">= 1.10.0"
+          terraform_version: ">= 1.10.0"  # Set the minimum required version of Terraform
           terraform_wrapper: false
 
-      # Format Terraform files
-      - name: Terraform Format
+      - name: Terraform Format  # Format the Terraform configuration files for consistency
         id: fmt
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
           terraform fmt .
 
-      # Initialize Terraform
-      - name: Terraform Init
+      - name: Terraform Init  # Initialize Terraform configuration
         id: init
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
           terraform init
 
-      # Validate Terraform configuration
-      - name: Terraform Validate
+      - name: Terraform Validate  # Validate the Terraform configuration to ensure it's correct
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
           terraform validate
 
-      # Terraform Plan (only for pull request)
-      - name: Terraform Plan
+      - name: Terraform Plan  # Generate an execution plan for Terraform (only for pull requests)
         if: ${{ github.event_name == 'pull_request' }}
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
           terraform plan
      
-      # Apply Terraform changes (only for push to the terraform branch)
-      - name: Terraform Apply
+      - name: Terraform Apply  # Apply Terraform changes (only for pushes to the main branch)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           cd $GITHUB_WORKSPACE/project/project_dev
-          terraform apply -auto-approve
+          terraform apply -auto-approve  # Automatically apply the changes without manual approval
